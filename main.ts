@@ -75,6 +75,8 @@ function toCurveView(c: Curve, state: BotState): CurveView {
     vqSol: Number(c.virtual_quote_reserves) / LAMPORTS,
     vtRaw: Number(c.virtual_token_reserves),
     complete: c.complete,
+    // Per-reply buy cap for this mint, from hello.caps (100 bps of the
+    // mint's real SOL reserve here); the strategy never asks for more.
     maxBuySol: Number(state.maxBuyLamports(c.mint)) / LAMPORTS,
   };
 }
@@ -117,6 +119,9 @@ function createBot(): Bot {
         txFeeSol: Number(state.txFeeLamports()) / LAMPORTS,
       };
       const decided = drip.onBatch(view);
+      // client_id is deliberately omitted from every order below: the shim
+      // assigns o1, o2, ... in send order, which also keeps the reply small
+      // (the harness caps a reply at 64 KiB).
       const orders: OrderInput[] = [];
       for (const o of decided) {
         if (o.side === 'buy') {

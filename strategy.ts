@@ -16,7 +16,7 @@
 //    several distinct buyers) AND is currently pulling back a few percent from
 //    its recent high. Chasing a +8% breakout pays the top; a pullback inside
 //    an uptrend pays the reversion.
-//  - TIGHT EXITS: take-profit +9%, stop-loss -4.5%, a stall exit for dead
+//  - TIGHT EXITS: take-profit +12%, stop-loss -5%, a stall exit for dead
 //    money (still flat after ~120 slots), a flow-reversal exit (buyers left),
 //    and a hard time exit (~360 slots). No trailing stop, no marrying bags.
 //  - HOURLY PACING: at most 8 new entries per hour of block time, so trades
@@ -31,7 +31,7 @@
 // a trailing stop and probe round trips that buy anything to hit the coin
 // bar. This bot does the opposite on entry (dip inside an uptrend, wider age
 // window 120-2400 slots, inflow bar far lower), exits sooner and smaller
-// (TP +9% / SL -4.5%, stall exit, no trailing stop), paces entries per hour
+// (TP +12% / SL -5%, stall exit, no trailing stop), paces entries per hour
 // for Sharpe smoothness, winds down before the end, and never buys a coin
 // just to hit the bar -- a behind-pace ladder only loosens the dip, never
 // drops the trend/flow filters.
@@ -42,7 +42,7 @@
 // - Every order pays base (5,000) + priority (100,000) lamports tx fee
 //   (~0.000105 SOL) plus 0.95% protocol + 0.30% creator curve fees per side,
 //   so a round trip costs ~3.2% of a 0.03 SOL stake before any price move.
-//   TP +9% / SL -4.5% breaks even near a ~55% win rate; the edge has to come
+//   TP +12% / SL -5% breaks even near a ~48% win rate; the edge has to come
 //   from the entry filter (uptrend + pullback + positive flow), not sizing.
 // - A buy on one mint in one reply may spend at most max_order_bps_of_real_
 //   reserve of that mint's real SOL reserve (100 bps = 1% here): a 0.03 SOL
