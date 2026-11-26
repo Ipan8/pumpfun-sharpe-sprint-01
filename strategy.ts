@@ -1,69 +1,65 @@
-// Steady Drip: a pump.fun bonding-curve replay bot (agent-fun/replay/v2).
+// Steady Drip — dip-reversion scalper for the pump.fun replay harness.
 //
-// IDEA (dip-reversion scalper, built for HOURLY SHARPE, not moonshots):
-// The ranking is the hourly Sharpe ratio over a 6-hour forward replay, and a
-// prize needs net PnL > 0 after every fee. With only six hourly buckets, one
-// wild hour (a bag held through a rug, or a single lucky 5x) wrecks the ratio:
-// Sharpe = mean(hourly return) / std(hourly return) rewards small, steady,
-// repeatable gains and punishes variance. So this bot trades like a dripping
-// tap, not a sniper:
+// RANKING IS HOURLY SHARPE, NOT PNL. The contest scores six hourly buckets
+// and needs net PnL above zero for a prize, so one wild hour — a bag ridden
+// through a rug, or a single lucky moonshot — sinks the whole entry. The
+// answer is volume of small, repeatable, boring trades: dozens of tiny
+// round trips per hour whose average is smooth, instead of a few big bets
+// whose variance dominates the ratio.
 //
-//  - MANY SMALL ROUND TRIPS: one fixed 0.03 SOL stake per coin, no pyramiding,
-//    fast exits. Dozens of tiny outcomes per hour average out into a smooth
-//    hourly return (law of large numbers), instead of a few big bets.
-//  - BUY THE DIP, NEVER CHASE: enter only a coin that already proved itself
-//    (price still above where its window started, net SOL inflow positive,
-//    several distinct buyers) AND is currently pulling back a few percent from
-//    its recent high. Chasing a +8% breakout pays the top; a pullback inside
-//    an uptrend pays the reversion.
-//  - TIGHT EXITS: take-profit +12%, stop-loss -5%, a stall exit for dead
-//    money (still flat after ~120 slots), a flow-reversal exit (buyers left),
-//    and a hard time exit (~360 slots). No trailing stop, no marrying bags.
-//  - HOURLY PACING: at most 8 new entries per hour of block time, so trades
-//    land in every hour instead of all bunching into hour one.
-//  - WIND-DOWN: in the last 45 minutes of the window no new entries, exits
-//    tighten (TP +5%, SL -3%, max hold 120 slots), so the harness's forced
-//    flatten at the end of data cannot nuke the final hourly bucket.
+// THE TRADE, IN ONE PARAGRAPH: buy a coin that is already climbing, but buy
+// it on a pullback, not on the spike. The coin must be above where it was
+// when the lookback window opened, must be taking in more SOL than it leaks,
+// and must have several different wallets buying it. Then wait for the price
+// to sag a little off its recent high and step in with a fixed 0.03 SOL.
+// Get out fast: a modest profit target, a tight loss cut, an exit when the
+// trade goes nowhere, an exit when the buyers walk away, and a hard clock
+// on every position. Never add to a loser, never chase a runner, never buy
+// a coin only to pad the coin count.
 //
-// HOW IT DIFFERS FROM THE TEAM'S EARLIER "FIRST-WAVE FLIP" BOT: that bot
-// chased breakouts (buy after +8% over 40 slots, near the window high, age
-// 500-900 slots, inflow >= 3 SOL from >= 5 buyers) with TP +15% / SL -8%,
-// a trailing stop and probe round trips that buy anything to hit the coin
-// bar. This bot does the opposite on entry (dip inside an uptrend, wider age
-// window 120-2400 slots, inflow bar far lower), exits sooner and smaller
-// (TP +12% / SL -5%, stall exit, no trailing stop), paces entries per hour
-// for Sharpe smoothness, winds down before the end, and never buys a coin
-// just to hit the bar -- a behind-pace ladder only loosens the dip, never
-// drops the trend/flow filters.
+// PACING AND THE ENDGAME: new entries are capped per hour of block time so
+// trades spread across all six buckets instead of piling into the first.
+// In the final 45 minutes the bot stops opening and tightens every exit,
+// because the harness flattens whatever is still open when the data ends
+// and a forced sale in the last bucket would wreck the Sharpe.
 //
-// MONEY FACTS (from this competition's fresh kit, competition.yaml):
-// - Capital is 10 SOL; at most 5 open positions; orders decided on slot s
-//   fill at slot s + latency_slots (2). Max 16 orders per batch.
-// - Every order pays base (5,000) + priority (100,000) lamports tx fee
-//   (~0.000105 SOL) plus 0.95% protocol + 0.30% creator curve fees per side,
-//   so a round trip costs ~3.2% of a 0.03 SOL stake before any price move.
-//   TP +12% / SL -5% breaks even near a ~48% win rate; the edge has to come
-//   from the entry filter (uptrend + pullback + positive flow), not sizing.
-// - A buy on one mint in one reply may spend at most max_order_bps_of_real_
-//   reserve of that mint's real SOL reserve (100 bps = 1% here): a 0.03 SOL
-//   stake needs real SOL >= 3, which the entry filter enforces.
-// - A round trip only counts toward the 20-coin bar if the buy is >= 0.01
-//   SOL; the 0.03 SOL stake clears that with room.
-// - The harness closes a position itself when its curve completes, and
-//   flattens everything left when the data ends (hence the wind-down).
+// WHAT THIS IS NOT: it is not the team's earlier breakout-chaser, which
+// bought after a +8% surge near the high with a wide stop and a trailing
+// stop, and which bought anything to clear the coin bar. This one buys the
+// dip inside an uptrend, exits smaller and sooner, has no trailing stop,
+// and never fires a probe trade. The pace ladder below only relaxes how
+// deep a dip may be; it never relaxes the trend, flow, age, or buyer
+// requirements.
 //
-// DETERMINISM: executed twice, action logs must match byte for byte. No
-// clock, no environment, no Math.random. Every decision comes only from slot
-// numbers, block times carried by the events, and the events themselves,
-// iterated in insertion order.
+// COSTS, FROM THE FRESH KIT (competition.yaml, verified post-open):
+// - 10 SOL of paper capital, at most 5 positions open, 16 orders per
+//   batch, fills land 2 slots after the decision.
+// - Each order pays 5,000 + 100,000 lamports of transaction fee, and each
+//   side pays 0.95% protocol plus 0.30% creator curve fees. A round trip on
+//   a 0.03 SOL stake therefore costs about 3.2% before any price move.
+//   With a +12% target and a -5% cut, the breakeven win rate sits near
+//   48% — the edge has to come from picking entries, not from sizing.
+// - One reply may spend at most 1% of a mint's real SOL reserve on that
+//   mint, so a 0.03 SOL stake needs at least 3 SOL of real reserve; the
+//   entry check enforces that directly.
+// - A round trip counts toward the 20-coin bar only at 0.01 SOL or more;
+//   0.03 SOL clears it comfortably.
+// - The harness closes a position on its own when the curve migrates, and
+//   flattens everything left at the end of the data (hence the wind-down).
 //
-// This file is PURE strategy: no kit imports, no I/O. main.ts adapts the
-// harness BotState into the MarketView below.
+// DETERMINISM: the entry is executed twice and the two action logs must
+// match byte for byte. There is no clock here, no environment read, no
+// Math.random. Every choice follows from slot numbers, block times carried
+// by the events, and the events themselves, in chain order.
+//
+// PURE LOGIC, NO WIRING: this file never imports the kit and never touches
+// I/O. main.ts translates the harness state into the plain EngineView below
+// and translates the orders back out.
 
 /** Curve fee on a trade: 0.95% protocol + 0.30% creator, as a share. */
 export const CURVE_FEE = 0.0125;
 
-export interface SteadyDripParams {
+export interface DripConfig {
   /** Entry lookback window, in slots. */
   window: number;
   /** Earliest age (slots since CreateEvent) at which a coin may be bought. */
@@ -125,7 +121,7 @@ export interface SteadyDripParams {
   windDownHold: number;
 }
 
-export const DEFAULT_PARAMS: SteadyDripParams = {
+export const DEFAULT_CONFIG: DripConfig = {
   window: 60,
   minAge: 120,
   maxAge: 2400,
@@ -171,10 +167,10 @@ export const DEFAULT_PARAMS: SteadyDripParams = {
   windDownHold: 120,
 };
 
-/** Slots per hour, used only when no block_time has been seen yet. */
+/** Fallback hour length in slots, used only until the first block_time arrives. */
 const SLOTS_PER_HOUR = 9000;
 
-export interface CurveView {
+export interface CurveSnapshot {
   mint: string;
   /** Slot of its CreateEvent; null when first seen through a trade or mark. */
   createdSlot: number | null;
@@ -190,7 +186,7 @@ export interface CurveView {
   maxBuySol: number;
 }
 
-export interface PositionView {
+export interface HoldingView {
   mint: string;
   /** Tokens held, raw units, as a decimal string (opaque: passed to sells). */
   tokenAmount: string;
@@ -198,7 +194,7 @@ export interface PositionView {
   costSol: number;
 }
 
-export type MarketEvent =
+export type TapeEvent =
   | { kind: 'create'; mint: string; slot: number; blockTime: number | null }
   | {
       kind: 'trade';
@@ -212,15 +208,15 @@ export type MarketEvent =
     }
   | { kind: 'complete'; mint: string; slot: number };
 
-/** Everything the strategy needs for one batch, in plain numbers. */
-export interface MarketView {
+/** Everything the engine needs for one batch, in plain numbers. */
+export interface EngineView {
   slot: number;
   /** This batch's events, in chain order. */
-  events: MarketEvent[];
+  events: TapeEvent[];
   /** Latest known curve state per mint, in first-seen order. */
-  curves: Map<string, CurveView>;
+  curves: Map<string, CurveSnapshot>;
   /** Current positions, by mint. */
-  positions: Map<string, PositionView>;
+  positions: Map<string, HoldingView>;
   /** Mints with a buy / sell still in flight (do not double-order). */
   pendingBuys: Set<string>;
   pendingSells: Set<string>;
@@ -232,11 +228,11 @@ export interface MarketView {
   txFeeSol: number;
 }
 
-export type StrategyOrder =
+export type DripOrder =
   | { side: 'buy'; mint: string; quoteSol: number }
   | { side: 'sell'; mint: string; tokenAmount: string };
 
-interface TapeTrade {
+interface CoinTrade {
   slot: number;
   buy: boolean;
   sol: number;
@@ -244,41 +240,41 @@ interface TapeTrade {
   price: number;
 }
 
-interface Tape {
+interface CoinTape {
   created: number | null;
-  trades: TapeTrade[];
+  trades: CoinTrade[];
   lastExit: number;
   entered: boolean;
 }
 
-interface Held {
+interface OpenTrade {
   opened: number;
 }
 
-export function createSteadyDrip(p: SteadyDripParams = DEFAULT_PARAMS) {
-  const tapes = new Map<string, Tape>();
-  const held = new Map<string, Held>();
+export function createDrip(cfg: DripConfig = DEFAULT_CONFIG) {
+  const books = new Map<string, CoinTape>();
+  const open = new Map<string, OpenTrade>();
   /** Distinct mints this bot has ever bought (filled or not, harness closes excluded). */
-  const myCoins = new Set<string>();
+  const coinsBought = new Set<string>();
   let firstTime: number | null = null;
   let firstSlot: number | null = null;
   /** New entries per hour index, for the Sharpe pacing cap. */
-  const entriesPerHour = new Map<number, number>();
-  const keep = Math.max(p.window, p.fadeWindow) + 5;
+  const entriesByHour = new Map<number, number>();
+  const keep = Math.max(cfg.window, cfg.fadeWindow) + 5;
 
-  const tapeOf = (mint: string): Tape => {
-    let t = tapes.get(mint);
-    if (t === undefined) {
-      t = { created: null, trades: [], lastExit: -1e12, entered: false };
-      tapes.set(mint, t);
+  const bookFor = (mint: string): CoinTape => {
+    let b = books.get(mint);
+    if (b === undefined) {
+      b = { created: null, trades: [], lastExit: -1e12, entered: false };
+      books.set(mint, b);
     }
-    return t;
+    return b;
   };
 
   let latestTime: number | null = null;
 
   /** Hour index of the current moment, for the per-hour entry cap. */
-  const hourIndex = (view: MarketView): number | null => {
+  const hourOf = (view: EngineView): number | null => {
     if (firstTime !== null && latestTime !== null) {
       return Math.floor((latestTime - firstTime) / 3600);
     }
@@ -288,21 +284,21 @@ export function createSteadyDrip(p: SteadyDripParams = DEFAULT_PARAMS) {
     return null;
   };
 
-  const inWindDown = (view: MarketView): boolean => {
+  const windingDown = (view: EngineView): boolean => {
     if (firstTime !== null && latestTime !== null) {
-      return latestTime - firstTime >= p.windDownSecs;
+      return latestTime - firstTime >= cfg.windDownSecs;
     }
     if (firstSlot !== null) {
-      return view.slot - firstSlot >= (p.windDownSecs / 3600) * SLOTS_PER_HOUR;
+      return view.slot - firstSlot >= (cfg.windDownSecs / 3600) * SLOTS_PER_HOUR;
     }
     return false;
   };
 
   /** Net SOL flow (buys minus sells) over the last `w` slots of a tape. */
-  const flow = (t: Tape, now: number, w: number): number => {
+  const netFlow = (b: CoinTape, now: number, w: number): number => {
     let net = 0;
-    for (let i = t.trades.length - 1; i >= 0; i--) {
-      const tr = t.trades[i]!;
+    for (let i = b.trades.length - 1; i >= 0; i--) {
+      const tr = b.trades[i]!;
       if (tr.slot <= now - w) break;
       net += tr.buy ? tr.sol : -tr.sol;
     }
@@ -310,17 +306,17 @@ export function createSteadyDrip(p: SteadyDripParams = DEFAULT_PARAMS) {
   };
 
   /**
-   * Entry signal: an uptrend coin in a pullback. `dip` is the looseness
-   * ladder step (0 = strict): each step relaxes dipMin / minTrendUp a notch
+   * Entry test: an uptrend coin in a pullback. `step` is the looseness
+   * ladder rung (0 = strict): each rung relaxes dipMin / minTrendUp a notch
    * when the run is behind its coin pace, never the flow/age filters.
    */
-  const entrySignal = (t: Tape, now: number, curve: CurveView, dip: number): boolean => {
-    if (curve.realSol < p.minRqSol || curve.realSol > p.maxRqSol) return false;
-    if (curve.complete || t.created === null) return false;
-    const age = now - t.created;
-    if (age < p.minAge || age > p.maxAge) return false;
-    if (t.entered || now - t.lastExit < p.cooldown) return false;
-    const from = now - p.window;
+  const entryOk = (b: CoinTape, now: number, curve: CurveSnapshot, step: number): boolean => {
+    if (curve.realSol < cfg.minRqSol || curve.realSol > cfg.maxRqSol) return false;
+    if (curve.complete || b.created === null) return false;
+    const age = now - b.created;
+    if (age < cfg.minAge || age > cfg.maxAge) return false;
+    if (b.entered || now - b.lastExit < cfg.cooldown) return false;
+    const from = now - cfg.window;
     let buySol = 0;
     let sellSol = 0;
     let buys = 0;
@@ -328,7 +324,7 @@ export function createSteadyDrip(p: SteadyDripParams = DEFAULT_PARAMS) {
     let high = 0;
     let last = 0;
     const byUser = new Map<string, number>();
-    for (const tr of t.trades) {
+    for (const tr of b.trades) {
       if (tr.slot <= from) {
         startPrice = tr.price;
         continue;
@@ -344,30 +340,30 @@ export function createSteadyDrip(p: SteadyDripParams = DEFAULT_PARAMS) {
       if (tr.price > high) high = tr.price;
       last = tr.price;
     }
-    if (buys < p.minBuys || byUser.size < p.minBuyers) return false;
-    if (buySol - sellSol < p.minNetSol) return false;
+    if (buys < cfg.minBuys || byUser.size < cfg.minBuyers) return false;
+    if (buySol - sellSol < cfg.minNetSol) return false;
     const vol = buySol + sellSol;
-    if (vol > 0 && sellSol / vol > p.maxSellShare) return false;
+    if (vol > 0 && sellSol / vol > cfg.maxSellShare) return false;
     if (startPrice <= 0 || last <= 0 || high <= 0) return false;
     // Trend: still above where the window started (an uptrend, not a corpse).
     const trendUp = last / startPrice - 1;
-    if (trendUp < p.minTrendUp - dip * 0.01) return false;
+    if (trendUp < cfg.minTrendUp - step * 0.01) return false;
     // Dip: below the window high, but not collapsed.
     const dipNow = 1 - last / high;
-    if (dipNow < Math.max(0.01, p.dipMin - dip * 0.005)) return false;
-    if (dipNow > p.dipMax) return false;
+    if (dipNow < Math.max(0.01, cfg.dipMin - step * 0.005)) return false;
+    if (dipNow > cfg.dipMax) return false;
     return true;
   };
 
   /** SOL selling the whole position returns now, net of curve + tx fees. */
-  const valueOf = (pos: PositionView, curve: CurveView, txFeeSol: number): number => {
+  const exitValue = (pos: HoldingView, curve: CurveSnapshot, txFeeSol: number): number => {
     const tokens = Number(pos.tokenAmount);
     if (tokens <= 0 || curve.vtRaw <= 0) return 0;
     const gross = (tokens * curve.vqSol) / (curve.vtRaw + tokens);
     return gross * (1 - CURVE_FEE) - txFeeSol;
   };
 
-  function onBatch(view: MarketView): StrategyOrder[] {
+  function onBatch(view: EngineView): DripOrder[] {
     const now = view.slot;
     const traded = new Set<string>();
     for (const e of view.events) {
@@ -377,50 +373,50 @@ export function createSteadyDrip(p: SteadyDripParams = DEFAULT_PARAMS) {
       }
       if (firstSlot === null) firstSlot = e.slot;
       if (e.kind === 'create') {
-        tapeOf(e.mint).created = e.slot;
+        bookFor(e.mint).created = e.slot;
       } else if (e.kind === 'trade') {
-        const t = tapeOf(e.mint);
-        t.trades.push({ slot: e.slot, buy: e.buy, sol: e.sol, user: e.user, price: e.price });
+        const b = bookFor(e.mint);
+        b.trades.push({ slot: e.slot, buy: e.buy, sol: e.sol, user: e.user, price: e.price });
         traded.add(e.mint);
       }
     }
     for (const mint of traded) {
-      const t = tapes.get(mint)!;
+      const b = books.get(mint)!;
       let cut = 0;
-      while (cut < t.trades.length && t.trades[cut]!.slot <= now - keep) cut++;
-      if (cut > 0) t.trades.splice(0, cut);
+      while (cut < b.trades.length && b.trades[cut]!.slot <= now - keep) cut++;
+      if (cut > 0) b.trades.splice(0, cut);
     }
 
-    const orders: StrategyOrder[] = [];
+    const orders: DripOrder[] = [];
     const cap = view.maxOrders;
-    const windDown = inWindDown(view);
-    const tp = windDown ? p.windDownTp : p.takeProfit;
-    const sl = windDown ? p.windDownSl : p.stopLoss;
-    const hold = windDown ? p.windDownHold : p.maxHold;
+    const windDown = windingDown(view);
+    const tp = windDown ? cfg.windDownTp : cfg.takeProfit;
+    const sl = windDown ? cfg.windDownSl : cfg.stopLoss;
+    const hold = windDown ? cfg.windDownHold : cfg.maxHold;
 
     // Exits first: take-profit, stop-loss, stall, flow-reversal, time exit.
-    for (const [mint, h] of held) {
+    for (const [mint, h] of open) {
       const pos = view.positions.get(mint);
       const curve = view.curves.get(mint);
       if (pos === undefined) {
         if (!view.pendingBuys.has(mint) && !view.pendingSells.has(mint)) {
-          held.delete(mint);
-          tapeOf(mint).lastExit = now;
+          open.delete(mint);
+          bookFor(mint).lastExit = now;
         }
         continue;
       }
       if (curve === undefined || curve.complete) continue;
-      const value = valueOf(pos, curve, view.txFeeSol);
+      const value = exitValue(pos, curve, view.txFeeSol);
       const cost = pos.costSol;
       if (cost <= 0) continue;
       const ratio = value / cost;
       let exit = false;
       if (ratio >= 1 + tp) exit = true; // reversion reached the target
       if (!exit && ratio <= 1 - sl) exit = true; // cut the loser fast
-      if (!exit && now - h.opened > p.stallSlots && ratio > 1 - p.stallBand && ratio < 1 + p.stallBand) {
+      if (!exit && now - h.opened > cfg.stallSlots && ratio > 1 - cfg.stallBand && ratio < 1 + cfg.stallBand) {
         exit = true; // dead money: free the slot for a fresh trade
       }
-      if (!exit && flow(tapeOf(mint), now, p.fadeWindow) < -p.fadeNetSol) exit = true;
+      if (!exit && netFlow(bookFor(mint), now, cfg.fadeWindow) < -cfg.fadeNetSol) exit = true;
       if (!exit && now - h.opened > hold) exit = true;
       if (!exit) continue;
       if (view.pendingSells.has(mint)) continue;
@@ -430,48 +426,48 @@ export function createSteadyDrip(p: SteadyDripParams = DEFAULT_PARAMS) {
 
     // Entries: one fixed stake per coin, only on this batch's traded mints,
     // only while the hour still has entry budget and outside wind-down.
-    const hour = hourIndex(view);
+    const hour = hourOf(view);
     const hourBudget =
-      hour === null ? p.perHourCap : p.perHourCap - (entriesPerHour.get(hour) ?? 0);
+      hour === null ? cfg.perHourCap : cfg.perHourCap - (entriesByHour.get(hour) ?? 0);
     let free = view.freeCashSol;
     let slotsLeft = view.maxPositions - view.positions.size - view.pendingBuys.size;
     if (!windDown && hourBudget > 0 && slotsLeft > 0) {
       // Behind-pace ladder: loosen the dip step by step, never the filters.
       let pace = 1;
       if (firstTime !== null && latestTime !== null) {
-        pace = Math.min(1, (latestTime - firstTime) / p.paceSecs);
+        pace = Math.min(1, (latestTime - firstTime) / cfg.paceSecs);
       } else if (firstSlot !== null) {
-        pace = Math.min(1, (now - firstSlot) / (p.paceSecs / 3600) / SLOTS_PER_HOUR);
+        pace = Math.min(1, (now - firstSlot) / (cfg.paceSecs / 3600) / SLOTS_PER_HOUR);
       }
-      const behind = myCoins.size < Math.ceil(p.targetCoins * pace);
-      const maxDipStep = behind ? 3 : 0;
+      const behind = coinsBought.size < Math.ceil(cfg.targetCoins * pace);
+      const maxStep = behind ? 3 : 0;
       let entries = 0;
-      for (let dip = 0; dip <= maxDipStep && entries < hourBudget; dip++) {
+      for (let step = 0; step <= maxStep && entries < hourBudget; step++) {
         for (const mint of traded) {
           if (orders.length >= cap || entries >= hourBudget) break;
           if (slotsLeft <= 0) break;
           const curve = view.curves.get(mint);
           if (curve === undefined || curve.complete) continue;
-          if (held.has(mint) || view.pendingBuys.has(mint) || view.pendingSells.has(mint)) continue;
+          if (open.has(mint) || view.pendingBuys.has(mint) || view.pendingSells.has(mint)) continue;
           if (view.positions.has(mint)) continue;
-          const t = tapes.get(mint)!;
-          if (!entrySignal(t, now, curve, dip)) continue;
-          let amount = Math.min(curve.maxBuySol, p.stakeSol);
+          const b = books.get(mint)!;
+          if (!entryOk(b, now, curve, step)) continue;
+          let amount = Math.min(curve.maxBuySol, cfg.stakeSol);
           if (amount > free - view.txFeeSol) amount = free - view.txFeeSol;
-          if (amount < p.minBuySol) continue;
+          if (amount < cfg.minBuySol) continue;
           orders.push({ side: 'buy', mint, quoteSol: amount });
           free -= amount + view.txFeeSol;
           slotsLeft--;
           entries++;
-          if (hour !== null) entriesPerHour.set(hour, (entriesPerHour.get(hour) ?? 0) + 1);
-          t.entered = true;
-          myCoins.add(mint);
-          held.set(mint, { opened: now });
+          if (hour !== null) entriesByHour.set(hour, (entriesByHour.get(hour) ?? 0) + 1);
+          b.entered = true;
+          coinsBought.add(mint);
+          open.set(mint, { opened: now });
         }
       }
     }
     return orders;
   }
 
-  return { onBatch, params: p };
+  return { onBatch, params: cfg };
 }

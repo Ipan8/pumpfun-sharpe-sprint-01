@@ -1,27 +1,28 @@
 // Steady Drip — entrypoint (agent-fun/replay/v2, Node 22).
 //
-// Thin adapter only: it translates the harness BotState into the pure
-// strategy's MarketView and translates the strategy's orders back. All
-// decisions live in strategy.ts (no kit imports there, no I/O, no clock,
-// no randomness), so the strategy can be driven by a synthetic harness
-// without the kit.
+// This file is only a bridge. It turns the harness BotState into the pure
+// engine's EngineView, hands the view to the drip strategy, and turns the
+// strategy's orders back into harness orders. No decision lives here: every
+// choice about what to buy or sell sits in strategy.ts, which imports
+// nothing from the kit and touches no I/O, so it can be driven on its own.
 //
 // The grader runs `node /bot/main.ts`. vendor/makefun-bot.ts is the kit's
-// SDK shim, copied from the FRESH kit downloaded after the competition
-// opened (the kit's own instructions say to copy that one file into
-// vendor/). It is NOT from an older competition's kit directory.
+// SDK shim, copied from the FRESH kit downloaded after this competition
+// opened — the kit's own instructions say to copy that one file into
+// vendor/. It never came from an older competition's kit directory.
 //
-// Protocol notes, from the fresh kit's sdk/ts/makefun-bot.ts:
-// - hello arrives once, then one batch per slot; the bot answers each batch
-//   with a single reply echoing its seq, at most caps.max_orders_per_batch
-//   orders (16 here). Orders decided on slot s fill at slot s + 2.
-// - Events are ChainEvent records: CreateEvent / TradeEvent / CompleteEvent.
-//   TradeEvent reserves are POST-trade; the *_quote_* fields are the SOL
-//   curve, which is what the strategy prices on.
-// - The shim assigns client ids (o1, o2, ...) when omitted, keeps
-//   BotState (cash, positions, curves, pending) current, and throws
-//   OrderError on a protocol violation instead of letting the run fail
-//   silently at grading time.
+// How the wire protocol works, per the fresh kit's sdk/ts/makefun-bot.ts:
+// - hello comes once, then one batch per slot. The bot answers every batch
+//   with exactly one reply that echoes the batch seq and carries at most
+//   caps.max_orders_per_batch orders (16 here). An order decided on slot s
+//   fills on slot s + 2.
+// - Events arrive as ChainEvent records — CreateEvent, TradeEvent, and
+//   CompleteEvent. A trade's reserves are POST-trade, and on SOL curves the
+//   *_quote_* reserves are the ones that price the trade.
+// - The shim hands out client ids (o1, o2, ...) when an order omits one,
+//   keeps BotState (cash, positions, curves, pending) up to date, and throws
+//   OrderError on a protocol violation instead of letting the run die
+//   quietly at grading time.
 
 import { pathToFileURL } from 'node:url';
 import {
@@ -34,10 +35,10 @@ import {
   type OrderInput,
 } from './vendor/makefun-bot.ts';
 import {
-  createSteadyDrip,
-  DEFAULT_PARAMS,
-  type CurveView,
-  type MarketView,
+  createDrip,
+  DEFAULT_CONFIG,
+  type CurveSnapshot,
+  type EngineView,
 } from './strategy.ts';
 
 const LAMPORTS = 1e9;
@@ -47,7 +48,7 @@ function priceOf(vq: bigint, vt: bigint): number {
   return vt === 0n ? 0 : Number(vq) / Number(vt);
 }
 
-function toMarketEvent(e: ChainEvent): import('./strategy.ts').MarketEvent {
+function toTapeEvent(e: ChainEvent): import('./strategy.ts').TapeEvent {
   if (e.event === 'CreateEvent') {
     return { kind: 'create', mint: e.mint, slot: e.slot, blockTime: e.block_time };
   }
@@ -66,7 +67,7 @@ function toMarketEvent(e: ChainEvent): import('./strategy.ts').MarketEvent {
   return { kind: 'complete', mint: e.mint, slot: e.slot };
 }
 
-function toCurveView(c: Curve, state: BotState): CurveView {
+function toCurveSnapshot(c: Curve, state: BotState): CurveSnapshot {
   return {
     mint: c.mint,
     createdSlot: c.created_slot,
@@ -82,16 +83,17 @@ function toCurveView(c: Curve, state: BotState): CurveView {
 }
 
 function createBot(): Bot {
-  const drip = createSteadyDrip(DEFAULT_PARAMS);
+  const drip = createDrip(DEFAULT_CONFIG);
   return {
     onBatch(state: BotState, batch: Batch): OrderInput[] {
-      const curves = new Map<string, CurveView>();
-      for (const c of state.curves.values()) curves.set(c.mint, toCurveView(c, state));
-      // Positions: token_amount is a bigint of raw units; the strategy
-      // treats it as an opaque decimal string and passes it back to sells.
-      // cost_lamports is what the harness reports as spent on the tokens
-      // still held, fees included, so value/cost is the true return.
-      const positions = new Map<string, import('./strategy.ts').PositionView>();
+      const curves = new Map<string, CurveSnapshot>();
+      for (const c of state.curves.values()) curves.set(c.mint, toCurveSnapshot(c, state));
+      // Positions: token_amount is raw units as a bigint, so the engine
+      // keeps it as an opaque decimal string and hands it straight back
+      // to sells. cost_lamports is what the harness reports as spent on
+      // the tokens still held, fees included, so value over cost is the
+      // true return on the position.
+      const positions = new Map<string, import('./strategy.ts').HoldingView>();
       for (const [mint, pos] of state.positions) {
         positions.set(mint, {
           mint,
@@ -105,9 +107,9 @@ function createBot(): Bot {
         if (po.order.side === 'buy') pendingBuys.add(po.order.mint);
         else pendingSells.add(po.order.mint);
       }
-      const view: MarketView = {
+      const view: EngineView = {
         slot: batch.slot,
-        events: batch.events.map(toMarketEvent),
+        events: batch.events.map(toTapeEvent),
         curves,
         positions,
         pendingBuys,
@@ -129,7 +131,7 @@ function createBot(): Bot {
             side: 'buy',
             mint: o.mint,
             quote_lamports: BigInt(Math.floor(o.quoteSol * LAMPORTS)),
-            max_slippage_bps: DEFAULT_PARAMS.buySlipBps,
+            max_slippage_bps: DEFAULT_CONFIG.buySlipBps,
           });
         } else {
           // Sells go out at 10000 bps: exit speed beats price on a 0.03 SOL
@@ -142,8 +144,8 @@ function createBot(): Bot {
           });
         }
       }
-      // Defense in depth: the strategy already caps at view.maxOrders, but
-      // the adapter is the last line before the reply goes on the wire.
+      // Defense in depth: the engine already caps at view.maxOrders, but
+      // the bridge is the last line before the reply goes on the wire.
       if (orders.length > view.maxOrders) orders.length = view.maxOrders;
       return orders;
     },
